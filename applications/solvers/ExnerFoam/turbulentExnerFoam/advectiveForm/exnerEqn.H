@@ -12,18 +12,22 @@
         (
             fvc::div(volFlux, U)
           - U*fvc::div(volFlux)
-//          + ((turbulence->divDevRhoReff(U)) & U)/rho
-          + 2*(Omega^(U-Ug))
-          - muSponge*(sqr(ghat) & U)
+          //+ ((turbulence->divDevRhoReff(U)) & U)/rho
+          - nu*fvc::laplacian(U)
+//            + 2*rho*(Omega^(U-Ug))
+//            - muSponge*rho*(sqr(ghat) & U)
         );
 
         // volFluxU is the flux without g or dpdz (to get the BCs right)
         volFluxU = volFlux.oldTime()
-             + (1-offCentre)*dt*dvolFluxdt.oldTime()
-             + offCentre*dt*dvolFluxdt;
+                 + dt/(1+ocCoeff)*
+                 (
+                     dvolFluxdt
+                   + ocCoeff*dvolFluxdt.oldTime()
+                 );
 
-        // add the gravity terms
-        volFlux = volFluxU + offCentre*dt*gSf;
+        // add the gravity terms (and the non-orthogonal grad Exner terms)
+        volFlux = volFluxU + dt/(1+ocCoeff)*gSf;
         phi = volFlux*rhof;
 
         for (int nonOrth=0; nonOrth<=nNonOrthCorr; nonOrth++)
@@ -32,7 +36,7 @@
             (
                 fvm::ddt(Psi, Exner)
               + fvc::div(phi)
-              - fvm::laplacian(Cp*rhof*thetaf*offCentre*dt, Exner)
+              - fvm::laplacian(dt/(1+ocCoeff)*rhof*Cp*thetaf, Exner)
             );
 
             if(ucorr == nOuterCorr-1 && nonOrth == nNonOrthCorr && corr == nCorr-1)
@@ -46,11 +50,12 @@
 
             if (nonOrth == nNonOrthCorr)
             {
-                volFlux -= offCentre*dt*Cp*thetaf*fvc::snGrad(Exner)*mesh.magSf();
-                
+                volFlux -= dt/(1+ocCoeff)*Cp*thetaf*fvc::snGrad(Exner)
+                     *mesh.magSf();
                 phi = volFlux*rhof;
                 U = fvc::reconstruct(volFlux);
                 Uf = fvc::interpolate(U);
+                Uf += (phi/rhof - (Uf & mesh.Sf()))*mesh.Sf()/sqr(mesh.magSf());
             }
         }
         // Update the pressure and temperature based on the new Exner

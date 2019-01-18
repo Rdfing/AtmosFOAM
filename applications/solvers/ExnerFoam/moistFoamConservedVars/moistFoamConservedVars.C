@@ -23,22 +23,17 @@ License
     Inc., 51 Franklin St, Fifth Floor, Boston, MA 02110-1301 USA
 
 Application
-    exnerFoamTurbulence
+    exnerFoamH
 
 Description
     Transient Solver for buoyant, inviscid, incompressible, non-hydrostatic flow
-    using a simultaneous solution of Exner, theta and phi
+    using a simultaneous solution of Exner, theta and V (flux in d direction)
 
 \*---------------------------------------------------------------------------*/
 
 #include "HodgeOps.H"
 #include "fvCFD.H"
-#include "turbulentFluidThermoModel.H"
-#include "ExnerTheta.H"
-#include "OFstream.H"
-#include "rhoThermo.H"
-#include "fvOptions.H"
-#include "CrankNicolsonDdtScheme.H"
+#include "atmosphere.H"
 
 // * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * //
 
@@ -48,33 +43,26 @@ int main(int argc, char *argv[])
     #include "createTime.H"
     #include "createMesh.H"
     #include "readEnvironmentalProperties.H"
-    #include "readThermoProperties.H"
     HodgeOps H(mesh);
+    surfaceScalarField gd("gd", g & H.delta());
     #define dt runTime.deltaT()
     #include "createFields.H"
     #include "initContinuityErrs.H"
-    const dimensionedScalar initHeat = fvc::domainIntegrate(theta*rho);
-    #include "initEnergy.H"
-    #include "energy.H"
     
     const dictionary& itsDict = mesh.solutionDict().subDict("iterations");
     const int nOuterCorr = itsDict.lookupOrDefault<int>("nOuterCorrectors", 2);
     const int nCorr = itsDict.lookupOrDefault<int>("nCorrectors", 1);
     const int nNonOrthCorr =
         itsDict.lookupOrDefault<int>("nNonOrthogonalCorrectors", 0);
-    fv::CrankNicolsonDdtScheme<vector> drhoUdt
-    (
-        mesh,
-        mesh.schemesDict().subDict("ddtSchemes").lookup("ddt(U)_CN")
-    );
-    const scalar offCentre = 1-0.5*drhoUdt.ocCoeff();
-    
-    turbulence->validate();   //- Validate turbulence fields after construction
-                            //  and update derived fields as required
+    const int nThetaCorr = itsDict.lookupOrDefault<int>("nThetaCorr", 2);
+    const scalar offCentre = readScalar(mesh.schemesDict().lookup("offCentre"));
 
 // * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * //
 
     Info<< "\nStarting time loop\n" << endl;
+
+    // Implicit parts of momentum equation
+    surfaceScalarField G("G", 1/(1+offCentre*dt*muSponge));
 
     while (runTime.loop())
     {
@@ -82,27 +70,27 @@ int main(int argc, char *argv[])
 
         #include "compressibleCourantNo.H"
 
-        for (int ucorr=0; ucorr<nOuterCorr; ucorr++)
+        #include "rhoEqn.H"
+        #include "phaseEqns.H"
+        for (int ucorr=0; ucorr < nOuterCorr; ucorr++)
         {
-            #include "rhoThetaEqn.H"
-            #include "UEqn.H"
+            for(int thetaCorr = 0; thetaCorr < nThetaCorr; thetaCorr++)
+            {
+                #include "rhoThetaEqn.H"
+            }
+            // Eqn of state
+            atmos.setExnerFromTheta(Exner,theta);
 
-            // Exner and momentum equations
-            #include "exnerEqn.H"
+            for (int corr=0; corr<nCorr; corr++)
+            {
+                #include "exnerEqn.H"
+                p = air.pFromExner(Exner);
+                #include "rhoEqn.H"
+                #include "phaseEqns.H"
+            }
         }
-        
-        // Update rates of change for next time step
-        dvolFluxdt += gSf - mesh.magSf()*Cp*thetaf*fvc::snGrad(Exner);
-        
-        #include "compressibleContinuityErrs.H"
 
-        dimensionedScalar totalHeatDiff = fvc::domainIntegrate(theta*rho)
-                                        - initHeat;
-        Info << "Heat error = " << (totalHeatDiff/initHeat).value() << endl;
-        #include "energy.H"
-        
-        //- Solve the turbulence equations and correct the turbulence viscosity
-        turbulence->correct(); 
+        #include "compressibleContinuityErrs.H"
 
         runTime.write();
 
