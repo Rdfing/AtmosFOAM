@@ -2,15 +2,14 @@
     Psi = pow(rho,(2*kappa-1)/(kappa-1))*pow(R/pRef*theta, kappa/(kappa-1));
     rho = Exner*Psi;
     rhof = fvc::interpolate(rho);
-
     thetaf = fvc::interpolate(theta);
 
     for (int corr=0; corr<nCorr; corr++)
     {
         // Explicit part of rate of change of flux
-        dvolFluxdt = -mesh.Sf() & fvc::interpolate
+        dvolFluxdt = - (Uf & fvc::interpolate(fvc::grad(Uf)))
+                     - mesh.Sf() & fvc::interpolate
         (
-            (U & fvc::grad(U))
           //+ ((turbulence->divDevRhoReff(U)) & U)/rho
           - nu*fvc::laplacian(U)
 //            + 2*rho*(Omega^(U-Ug))
